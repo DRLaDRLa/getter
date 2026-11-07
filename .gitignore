@@ -1,3 +1,4 @@
-*.db
 images/
 *.csv
+*.json
+*.txt

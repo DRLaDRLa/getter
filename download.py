@@ -1,8 +1,8 @@
 import asyncio
 import csv
+import json
 import os
 from pathlib import Path
-import aiosqlite
 import httpx
 
 IMAGE_DIR = os.getenv("IMAGE_DIR", str(Path.cwd() / "images"))
@@ -24,9 +24,6 @@ async def download_file(client: httpx.AsyncClient, semaphore: asyncio.Semaphore,
             # Offload synchronous disk I/O to a background thread
             await asyncio.to_thread(destination_path.write_bytes, response.content)
             print(f"[SUCCESS] Downloaded: {destination_path}")
-
-            # # Log the filename to SQLite
-            # await log_download(filename)
 
         except httpx.HTTPStatusError as e:
             print(f"[HTTP ERROR] Failed to download {filename}: {e.response.status_code}")
@@ -59,7 +56,7 @@ def get_downloaded_files() -> set[str]:
     # Find all files recursively on disk
     local_files = {
         p.relative_to(image_dir_path).as_posix()
-        for p in image_dir_path.rglob("*") if p.is_file()
+        for p in image_dir_path.rglob("*") if p.is_file() and len(p.stem) == 32 and all(c in '0123456789abcdef' for c in p.stem)
     }
 
     total_found_on_disk = len(local_files)
@@ -85,10 +82,10 @@ async def main(files_to_download):
         await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
+    files_to_download = []
+    deleted = 0
     with open('posts.csv', newline='') as csvfile:
-        files_to_download = []
         posts = csv.DictReader(csvfile)
-        deleted = 0
         for row in posts:
             is_deleted = row['is_deleted']
             if is_deleted == 't':
@@ -98,5 +95,22 @@ if __name__ == "__main__":
             file_ext = row['file_ext']
             path = f'{md5[0:2]}/{md5[2:4]}/{md5}.{file_ext}'
             files_to_download.append((f'https://static1.e6ai.net/data/{path}', f'{path}'))
+
+    with open("posts.json", "r") as f:
+        data = json.load(f)
+        posts = data.get("posts", [])
+
+        for post in posts:
+            if post.get("flags", {}).get("deleted", False):
+                deleted += 1
+                continue
+            file_info = post.get("file", {})
+            md5 = file_info.get("md5")
+            file_ext = file_info.get("ext")
+            path = f"{md5[0:2]}/{md5[2:4]}/{md5}.{file_ext}"
+            files_to_download.append((f"https://static1.e6ai.net/data/{path}", f"{path}"))
+
+    destroyed_count = 67
     print(f"[INFO] Found {len(files_to_download)} posts ({deleted} deleted skipped).")
+    print(f"[INFO] That's {len(files_to_download) + deleted + destroyed_count} total post IDs including the destroyed ones.")
     asyncio.run(main(files_to_download))
